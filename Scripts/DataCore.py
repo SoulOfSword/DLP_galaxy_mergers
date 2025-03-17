@@ -33,33 +33,59 @@ class RegressionDataset(Dataset):
         return given,out
 
     
-class ClassificationDataset(Dataset):
-    def __init__(self, datadir,labels,transform):
-        self.lengt = len(labels.data)
+class ClassificationDataset_labels(Dataset):
+    def __init__(self, datadir, labels, transform):
+        """
+        Args:
+          datadir (str): Base directory containing the FITS images.
+          labels: FITS HDU (labels.data) with columns 'is_pre_merger', 'is_ongoing_merger', 'is_post_merger'.
+          transform (callable): Function to apply to the raw image.
+        """
+        self.datadir = datadir
         self.labels = labels
-        
         self.transform = transform
-        
-        self.dataDir = datadir
-
-    def __len__(self):
-        return self.lengt
-
-    def __getitem__(self, idx):
+        self.length = len(self.labels.data)
     
-        label = self.labels.data[idx]
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        row = self.labels.data[idx]
+        ID = row["ID"]
+        snap = row["snapnum"]
         
-        tim = label['time_before_merger']
-        ID = label["ID"]
-        snap =label["snapnum"]
+        # Build file path for your FITS image
+        file_path = os.path.join(
+            self.datadir,
+            f"mock_v4/F150W/L75n1820TNG/snapnum_0{snap}/xy/"
+            f"JWST_50kpc_F150W_TNG100_sn0{snap}_xy_broadband_{ID}.fits"
+        )
         
-        isMerging = tim>0
-
-        img = fits.open(self.dataDir+f"mock_v4/F150W/L75n1820TNG/snapnum_0{snap}/xy/JWST_50kpc_F150W_TNG100_sn0{snap}_xy_broadband_{ID}.fits")[0].data
-        img = img.astype(np.float32, copy=False)
-        img = img.newbyteorder("=")  
+        # Load FITS image
+        with fits.open(file_path) as hdul:
+            img_data = hdul[0].data.astype(np.float32).newbyteorder("=")
         
-        given = torch.tensor(self.transform(img))
-        out = torch.tensor(isMerging)
-
-        return given,out
+        # Apply the transformation
+        img_transformed = self.transform(img_data)
+        
+        # Convert to tensor and replicate channel to get shape [3, H, W]
+        img_tensor = torch.tensor(img_transformed).unsqueeze(0).repeat(3, 1, 1)
+        
+        # Read flags
+        is_pre = (row['is_pre_merger'] == 1)
+        is_ongoing = (row['is_ongoing_merger'] == 1)
+        is_post = (row['is_post_merger'] == 1)
+        
+        # 3-class labeling logic:
+        # 0 => non-merger
+        # 1 => pre-merger
+        # 2 => ongoing OR post
+        if is_pre:
+            class_label = 1
+        elif is_ongoing or is_post:
+            class_label = 2
+        else:
+            class_label = 0
+        
+        label_tensor = torch.tensor(class_label, dtype=torch.long)
+        return img_tensor, label_tensor
