@@ -42,6 +42,35 @@ def aggressive_arcsinh_scaling(image):
     image_norm = (image_scaled - np.min(image_scaled)) / (np.max(image_scaled) - np.min(image_scaled) + 1e-8)
     return image_norm
 
+
+#TODO:
+#Test binning effects on learning
+
+def binningTransform(image: torch.Tensor, sizeBin: int = 1) -> torch.Tensor:  
+    """
+    Apply binning (averaging) to an image tensor.
+    
+    Args:
+        image (torch.Tensor): Input image tensor of shape (C, H, W).
+        sizeBin (int, optional): Binning factor. Default is 1 (no binning).
+    
+    Returns:
+        torch.Tensor: Binned image tensor of shape (C, H//sizeBin, W//sizeBin).
+    """
+    if sizeBin <= 1:
+        return image  # No binning needed
+    
+    C, H, W = image.shape
+    if H % sizeBin != 0 or W % sizeBin != 0:
+        raise ValueError("Image dimensions must be divisible by binning factor.")
+    
+    # Reshape and average over binning regions
+    image = image.view(C, H // sizeBin, sizeBin, W // sizeBin, sizeBin)
+    binnedImage = image.mean(dim=(2, 4))
+    
+    return binnedImage
+
+
 # Dataset for Classification
 class ClassificationDataset_values(Dataset):
     def __init__(self, datadir, labels, transform):
