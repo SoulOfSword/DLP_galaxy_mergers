@@ -9,8 +9,6 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
-from zoobot.pytorch.training import finetune
-from zoobot.pytorch.training.finetune import FinetuneableZoobotClassifier, LinearHead
 
 # Aggressive arcsinh scaling
 def aggressive_arcsinh_scaling(image):
