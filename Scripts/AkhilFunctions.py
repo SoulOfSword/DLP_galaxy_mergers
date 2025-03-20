@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Subset
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torch.cuda.amp import autocast, GradScaler
@@ -95,3 +95,39 @@ def multilabel_evaluate(model, loader, criterion, device, desc = 'testing'):
     all_labels = torch.cat(all_labels, dim=0).numpy()
 
     return epoch_loss, epoch_acc, all_preds, all_labels
+
+def aggressive_arcsinh(x, center_region_size=80, upper_percentile=90):
+    # x is assumed to be a tensor of shape [C, H, W]
+    C, H, W = x.shape
+
+    # Compute per-channel median
+    medians = torch.median(x.reshape(C, -1), dim=1)[0]  # shape [C]
+
+    # Replace values below the median with the median (broadcasted over H, W)
+    x_new = torch.maximum(x, medians.reshape(C, 1, 1))
+    
+    # Define center region coordinates
+    center_start_h = (H - center_region_size) // 2
+    center_start_w = (W - center_region_size) // 2
+    center_region = x_new[:, center_start_h:center_start_h+center_region_size, 
+                            center_start_w:center_start_w+center_region_size]
+    
+    # Compute per-channel upper threshold from the center region
+    upper_thresh = torch.quantile(center_region.reshape(C, -1), upper_percentile / 100.0, dim=1)  # shape [C]
+    
+    # Clamp values above the upper threshold
+    x_clamped = torch.minimum(x_new, upper_thresh.reshape(C, 1, 1))
+    
+    # Apply arcsinh scaling
+    return torch.asinh(x_clamped)
+
+class SubsetWithTransform(Subset):
+    def __init__(self, dataset, indices, transform):
+        super().__init__(dataset, indices)
+        self.new_transform = transform
+
+    def __getitem__(self, idx):
+        sample, target = super().__getitem__(idx)
+        if self.new_transform:
+            sample = self.new_transform(sample)
+        return sample, target
