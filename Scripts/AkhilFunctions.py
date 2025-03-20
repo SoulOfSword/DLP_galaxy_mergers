@@ -59,3 +59,39 @@ def evaluation_epoch(model, val_loader, criterion, device, desc, unsqueezeY = Fa
             val_loss += loss.item()
 
     return val_loss / len(val_loader)
+
+def multilabel_evaluate(model, loader, criterion, device, desc = 'testing'):
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total_samples = 0
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for inputs, labels in tqdm(loader, desc=desc, leave=False):
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)  # shape [batch_size, 2]
+            loss = criterion(outputs, labels)
+            running_loss += loss.item() * inputs.size(0)
+            total_samples += inputs.size(0)
+
+            # Apply sigmoid + threshold
+            preds = (torch.sigmoid(outputs) > 0.5).float()  # shape [batch_size, 2]
+            #preds = outputs
+
+            # Count fully correct samples (both bits match)
+            fully_correct = (preds == labels).all(dim=1).sum().item()
+            correct += fully_correct
+
+            all_preds.append(preds.cpu())
+            all_labels.append(labels.cpu())
+
+    epoch_loss = running_loss / total_samples
+    epoch_acc = correct / total_samples
+
+    # Concatenate predictions/labels for further analysis
+    all_preds = torch.cat(all_preds, dim=0).numpy()
+    all_labels = torch.cat(all_labels, dim=0).numpy()
+
+    return epoch_loss, epoch_acc, all_preds, all_labels
