@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset, Subset
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torch.cuda.amp import autocast, GradScaler
+from sklearn.metrics import balanced_accuracy_score
 
 scaler = GradScaler()
 
@@ -117,11 +118,13 @@ def multilabel_evaluate(model, loader, criterion, device, desc = 'testing'):
     epoch_loss = running_loss / total_samples
     epoch_acc = correct / total_samples
 
+    balanced_acc = balanced_accuracy_score(all_labels, all_preds)
+    
     # Concatenate predictions/labels for further analysis
     all_preds = torch.cat(all_preds, dim=0).numpy()
     all_labels = torch.cat(all_labels, dim=0).numpy()
 
-    return epoch_loss, epoch_acc, all_preds, all_labels
+    return epoch_loss, epoch_acc, all_preds, all_labels, balanced_acc
 
 def nonbinary_multilabel_evaluate(model, loader, criterion, device, desc='testing'):
     model.eval()
@@ -149,11 +152,13 @@ def nonbinary_multilabel_evaluate(model, loader, criterion, device, desc='testin
 
     epoch_loss = running_loss / total_samples
     epoch_acc = correct / total_samples
-
+    
     all_preds = torch.cat(all_preds, dim=0).numpy()
     all_labels = torch.cat(all_labels, dim=0).numpy()
-
-    return epoch_loss, epoch_acc, all_preds, all_labels
+    
+    balanced_acc = balanced_accuracy_score(all_labels, all_preds)
+    
+    return epoch_loss, epoch_acc, all_preds, all_labels, balanced_acc
 
 def aggressive_arcsinh(x, center_region_size=80, upper_percentile=90):
     # x is assumed to be a tensor of shape [C, H, W]
