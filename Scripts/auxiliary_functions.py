@@ -3,11 +3,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms.v2 as T
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, Subset
 from astropy.io import fits
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, roc_curve, auc
+from sklearn.metrics import confusion_matrix, balanced_accuracy_score, accuracy_score, precision_score, recall_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 
 # Aggressive arcsinh scaling
@@ -80,7 +81,7 @@ class FocalLossBCE(nn.Module):
         self.gamma = gamma
         self.alpha = alpha
         self.reduction = reduction
-        self.pos_weight = pos_weight  # can be a tensor of shape [2] if you have 2 bits
+        self.pos_weight = pos_weight
 
     def forward(self, inputs, targets):
         """
@@ -89,11 +90,11 @@ class FocalLossBCE(nn.Module):
         """
         bce_loss = F.binary_cross_entropy_with_logits(
             inputs, targets, reduction='none', pos_weight=self.pos_weight
-        )  # shape [batch_size, 2]
+        )
 
         # p = sigmoid(logits)
         p = torch.sigmoid(inputs)
-        pt = torch.where(targets == 1, p, 1 - p)  # shape [batch_size, 2]
+        pt = torch.where(targets == 1, p, 1 - p)
 
         # focal factor
         focal_factor = (1 - pt) ** self.gamma
@@ -191,7 +192,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
         total += labels.size(0)
     return running_loss / total, correct / total
 
-def multilabel_train_epoch(model, loader, criterion, optimizer, device):
+def multilabel_train_epoch(model, loader, criterion, optimizer, device, thresh=0.5):
     model.train()
     running_loss = 0.0
     total_samples = 0
@@ -200,8 +201,8 @@ def multilabel_train_epoch(model, loader, criterion, optimizer, device):
     for inputs, labels in loader:
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(inputs)             # shape [batch_size, 2]
-        loss = criterion(outputs, labels)   # BCEWithLogitsLoss
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
         
@@ -209,16 +210,9 @@ def multilabel_train_epoch(model, loader, criterion, optimizer, device):
         total_samples += inputs.size(0)
         
         # Threshold each of the 2 outputs
-        preds = (torch.sigmoid(outputs) > 0.5).float()  # shape [batch_size, 2]
+        preds = (torch.sigmoid(outputs) > thresh).float()
         
-        # If you want to count a sample correct only if *both bits* match:
-        #   all_dims_correct = (preds == labels).all(dim=1)
-        #   correct += all_dims_correct.sum().item()
-        
-        # Alternatively, you can count correctness bit by bit:
-        bitwise_correct = (preds == labels).sum(dim=1)  # how many bits correct for each sample
-        # e.g., if both bits match, bitwise_correct == 2. If one bit matches, bitwise_correct == 1.
-        # For "fully correct" (both bits):
+        bitwise_correct = (preds == labels).sum(dim=1)
         fully_correct = (bitwise_correct == 2).sum().item()
         correct += fully_correct
     
@@ -226,40 +220,41 @@ def multilabel_train_epoch(model, loader, criterion, optimizer, device):
     avg_acc = correct / total_samples
     return avg_loss, avg_acc
 
-def multilabel_evaluate(model, loader, criterion, device):
-    model.eval()
-    running_loss = 0.0
-    correct = 0
-    total_samples = 0
-    all_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for inputs, labels in loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)  # shape [batch_size, 2]
-            loss = criterion(outputs, labels)
-            running_loss += loss.item() * inputs.size(0)
-            total_samples += inputs.size(0)
-
-            # Apply sigmoid + threshold
-            preds = (torch.sigmoid(outputs) > 0.5).float()  # shape [batch_size, 2]
-
-            # Count fully correct samples (both bits match)
-            fully_correct = (preds == labels).all(dim=1).sum().item()
-            correct += fully_correct
-
-            all_preds.append(preds.cpu())
-            all_labels.append(labels.cpu())
-
-    epoch_loss = running_loss / total_samples
-    epoch_acc = correct / total_samples
-
-    # Concatenate predictions/labels for further analysis
-    all_preds = torch.cat(all_preds, dim=0).numpy()
-    all_labels = torch.cat(all_labels, dim=0).numpy()
-
-    return epoch_loss, epoch_acc, all_preds, all_labels
+def multilabel_evaluate(model, loader, criterion, device, thresh=0.5):
+	model.eval()
+	running_loss = 0.0
+	correct = 0
+	total_samples = 0
+	all_preds = []
+	all_labels = []
+	
+	with torch.no_grad():
+		for inputs, labels in loader:
+			inputs, labels = inputs.to(device), labels.to(device)
+			outputs = model(inputs)
+			loss = criterion(outputs, labels)
+			running_loss += loss.item() * inputs.size(0)
+			total_samples += inputs.size(0)
+	
+			# Apply sigmoid + threshold
+			preds = (torch.sigmoid(outputs) > thresh).float()
+	
+			# Count fully correct samples (both bits match)
+			fully_correct = (preds == labels).all(dim=1).sum().item()
+			correct += fully_correct
+	
+			all_preds.append(preds.cpu())
+			all_labels.append(labels.cpu())
+	
+	epoch_loss = running_loss / total_samples
+	epoch_acc = correct / total_samples
+	
+	# Concatenate predictions/labels for further analysis
+	all_preds = torch.cat(all_preds, dim=0).numpy()
+	all_labels = torch.cat(all_labels, dim=0).numpy()
+	mean_ba = (balanced_accuracy_score(all_labels[:, 0], all_preds[:, 0]) + balanced_accuracy_score(all_labels[:, 1], all_preds[:, 1]))/2
+	
+	return epoch_loss, epoch_acc, all_preds, all_labels, mean_ba
 
 def evaluate(model, loader, criterion, device):
     model.eval()
@@ -281,7 +276,7 @@ def evaluate(model, loader, criterion, device):
 def compute_metrics(y_true, y_pred):
     cm = confusion_matrix(y_true, y_pred)
     acc = accuracy_score(y_true, y_pred)
-    # Compute per-class precision and recall (do not average so you can see the performance for non-mergers, pre- and post-mergers)
+    # Compute per-class precision and recall
     prec = precision_score(y_true, y_pred, average=None, zero_division=0)
     rec = recall_score(y_true, y_pred, average=None, zero_division=0)
     return cm, acc, prec, rec
@@ -304,9 +299,9 @@ def multilabel_evaluate_with_probabilities(model, loader, device):
     with torch.no_grad():
         for inputs, labels in loader:
             inputs = inputs.to(device)
-            # For BCEWithLogitsLoss, each logit is for a separate bit (e.g. pre, post).
-            out = model(inputs)             # shape [batch_size, 2]
-            probs = torch.sigmoid(out)      # Convert logits -> probabilities in [0,1]
+            # For BCEWithLogitsLoss, each logit is for a separate bit
+            out = model(inputs)
+            probs = torch.sigmoid(out)
             all_probs.append(probs.cpu().numpy())
             all_labels.append(labels.numpy())
     return np.concatenate(all_probs, axis=0), np.concatenate(all_labels, axis=0)
@@ -324,7 +319,23 @@ def save_unique_figure(fig, directory=".", base_name="my_figure", ext="png"):
 			break
 		i += 1
 
-def plot_confusion_matrix(y_true, y_pred, classes=None, normalize=False, title=None, save=False, cmap=plt.cm.Blues):
+class AugmentedMinorityDataset(Dataset):
+    def __init__(self, base_ds, transform, times=3):
+        self.base_ds = base_ds
+        self.transform = transform
+        self.times = times
+    def __len__(self):
+        return len(self.base_ds) * self.times
+    def __getitem__(self, idx):
+        base_idx = idx // self.times
+        x, label = self.base_ds[base_idx]
+        # x is [3,H,W] => convert to PIL for random transforms
+        x_pil = T.functional.to_pil_image(x)
+        x_pil = self.transform(x_pil)
+        x_t   = T.functional.to_tensor(x_pil)
+        return x_t, label
+
+def plot_confusion_matrix(y_true, y_pred, classes=None, normalize=False, title=None, cmap=plt.cm.Blues):
     """
     From scikit-learn: plots a confusion matrix.
     Normalization can be applied by setting `normalize=True`.
