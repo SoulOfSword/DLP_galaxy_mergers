@@ -195,3 +195,17 @@ class SubsetWithTransform(Subset):
         if self.new_transform:
             sample = self.new_transform(sample)
         return sample, target
+
+class SubsetWithTransform_v2(Subset):
+    def __init__(self, dataset, indices, transform):
+        super().__init__(dataset, indices)
+        self.new_transform = transform
+
+    def __getitem__(self, idx):
+        # Use get_raw to bypass the original transforms.
+        sample, target = self.dataset.get_raw(self.indices[idx])
+        if self.new_transform:
+            sample = self.new_transform(sample)
+        # Convert target to tensor.
+        target = torch.tensor(target, dtype=torch.long)
+        return sample, target
